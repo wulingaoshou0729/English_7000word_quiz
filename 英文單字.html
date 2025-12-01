@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>單字翻譯測驗系統</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const Upload = () => (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+        );
+
+        const Check = () => (
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+        );
+
+        const X = ({ className = "w-6 h-6" }) => (
+            <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+        );
+
+        const RefreshCw = () => (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+        );
+
+        const FileSpreadsheet = () => (
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/>
+                <line x1="8" y1="17" x2="16" y2="17"/><line x1="10" y1="9" x2="10" y2="21"/>
+            </svg>
+        );
+
+        function WordQuizChecker() {
+            const [allWords, setAllWords] = useState([]);
+            const [unusedIndices, setUnusedIndices] = useState([]);
+            const [currentWord, setCurrentWord] = useState(null);
+            const [userAnswer, setUserAnswer] = useState('');
+            const [result, setResult] = useState(null);
+            const [score, setScore] = useState({ correct: 0, total: 0 });
+            const [sessionStats, setSessionStats] = useState({ tested: 0, remaining: 0 });
+            const [wrongWords, setWrongWords] = useState([]);
+            const [isTranslating, setIsTranslating] = useState(false);
+            const [showAddWrong, setShowAddWrong] = useState(false);
+            const [newWrongWord, setNewWrongWord] = useState({ english: '', chinese: '' });
+            const [quizSize, setQuizSize] = useState(null);
+            const [showQuizSizeSelect, setShowQuizSizeSelect] = useState(false);
+            const [customQuizSize, setCustomQuizSize] = useState('');
+
+            useEffect(() => {
+                const handleKeyPress = (e) => {
+                    if (e.key === 'Enter' && result !== null) {
+                        nextWord();
+                    }
+                };
+                window.addEventListener('keydown', handleKeyPress);
+                return () => window.removeEventListener('keydown', handleKeyPress);
+            }, [result, unusedIndices, wrongWords, allWords]);
+
+            useEffect(() => {
+                if (allWords.length > 0) {
+                    const savedWrongWords = localStorage.getItem('wrongWords');
+                    if (savedWrongWords) {
+                        try {
+                            const parsed = JSON.parse(savedWrongWords);
+                            const validWrongWords = parsed.filter(saved => 
+                                allWords.some(w => w.english === saved.english && w.chinese === saved.chinese)
+                            );
+                            if (validWrongWords.length > 0) {
+                                setWrongWords(validWrongWords);
+                            }
+                        } catch (e) {
+                            console.error('載入錯題失敗', e);
+                        }
+                    }
+                }
+            }, [allWords]);
+
+            useEffect(() => {
+                if (wrongWords.length > 0) {
+                    localStorage.setItem('wrongWords', JSON.stringify(wrongWords));
+                } else {
+                    localStorage.removeItem('wrongWords');
+                }
+            }, [wrongWords]);
+
+            const handleFileUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                try {
+                    const data = await file.arrayBuffer();
+                    const workbook = XLSX.read(data);
+                    const sheetName = workbook.SheetNames[0];
+                    const sheet = workbook.Sheets[sheetName];
+                    const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+                    const wordList = jsonData.slice(1)
+                        .filter(row => row[0] && row[1])
+                        .map(row => ({
+                            english: String(row[0]).trim(),
+                            chinese: String(row[1]).trim()
+                        }));
+
+                    setAllWords(wordList);
+                    const indices = Array.from({ length: wordList.length }, (_, i) => i);
+                    setUnusedIndices(indices);
+                    setSessionStats({ tested: 0, remaining: wordList.length });
+                    setScore({ correct: 0, total: 0 });
+                    setResult(null);
+                    setUserAnswer('');
+                    setShowQuizSizeSelect(true);
+                    setQuizSize(null);
+                } catch (error) {
+                    alert('讀取檔案時發生錯誤，請確認檔案格式正確');
+                }
+            };
+
+            const startQuiz = (size) => {
+                setQuizSize(size);
+                setShowQuizSizeSelect(false);
+                
+                let selectedIndices;
+                if (size === 'all') {
+                    selectedIndices = Array.from({ length: allWords.length }, (_, i) => i);
+                } else {
+                    const shuffled = Array.from({ length: allWords.length }, (_, i) => i)
+                        .sort(() => Math.random() - 0.5);
+                    selectedIndices = shuffled.slice(0, Math.min(size, allWords.length));
+                }
+                
+                wrongWords.forEach(word => {
+                    const wordIndex = allWords.findIndex(w => 
+                        w.english === word.english && w.chinese === word.chinese
+                    );
+                    if (wordIndex !== -1 && !selectedIndices.includes(wordIndex)) {
+                        selectedIndices.push(wordIndex);
+                    }
+                });
+                
+                setUnusedIndices(selectedIndices);
+                setSessionStats({ tested: 0, remaining: selectedIndices.length });
+                pickRandomWord(allWords, selectedIndices);
+            };
+
+            const pickRandomWord = (wordList = allWords, indices = unusedIndices) => {
+                if (indices.length === 0) return null;
+                const randomIdx = Math.floor(Math.random() * indices.length);
+                const wordIndex = indices[randomIdx];
+                setCurrentWord(wordList[wordIndex]);
+                const newIndices = indices.filter((_, i) => i !== randomIdx);
+                setUnusedIndices(newIndices);
+                setSessionStats(prev => ({ 
+                    tested: prev.tested + 1, 
+                    remaining: newIndices.length 
+                }));
+                return wordList[wordIndex];
+            };
+
+            const translateEnglishToChinese = async (englishText) => {
+                try {
+                    const response = await fetch(
+                        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(englishText)}&langpair=en|zh-TW`
+                    );
+                    const data = await response.json();
+                    if (data.responseStatus === 200 && data.responseData) {
+                        return data.responseData.translatedText;
+                    }
+                    return null;
+                } catch (error) {
+                    console.error('翻譯 API 錯誤:', error);
+                    return null;
+                }
+            };
+
+            const addWordToWrongList = (word) => {
+                const alreadyInWrong = wrongWords.some(w => 
+                    w.english === word.english && w.chinese === word.chinese
+                );
+                
+                if (!alreadyInWrong) {
+                    setWrongWords(prev => [...prev, word]);
+                }
+                
+                const wordIndex = allWords.findIndex(w => 
+                    w.english === word.english && w.chinese === word.chinese
+                );
+                
+                if (wordIndex !== -1 && !unusedIndices.includes(wordIndex)) {
+                    setUnusedIndices(prev => [...prev, wordIndex]);
+                    setSessionStats(prev => ({ 
+                        tested: prev.tested, 
+                        remaining: prev.remaining + 1 
+                    }));
+                }
+            };
+
+            const checkAnswer = async () => {
+                if (!userAnswer.trim()) {
+                    alert('請輸入答案');
+                    return;
+                }
+
+                setIsTranslating(true);
+                const userAns = userAnswer.trim();
+                const correctAns = currentWord.chinese;
+
+                if (userAns === '?' || userAns === '？' || userAns.replace(/[?\？\s]/g, '') === '') {
+                    setResult({ 
+                        isCorrect: false, 
+                        isExactMatch: false,
+                        correctAnswer: correctAns,
+                        method: 'question_mark'
+                    });
+                    setScore(prev => ({ correct: prev.correct, total: prev.total + 1 }));
+                    addWordToWrongList(currentWord);
+                    setIsTranslating(false);
+                    return;
+                }
+
+                const isExactMatch = userAns === correctAns;
+                if (isExactMatch) {
+                    setResult({ isCorrect: true, isExactMatch: true, correctAnswer: correctAns, method: 'exact' });
+                    setScore(prev => ({ correct: prev.correct + 1, total: prev.total + 1 }));
+                    setIsTranslating(false);
+                    return;
+                }
+
+                const translatedText = await translateEnglishToChinese(currentWord.english);
+                const cleanUser = userAns.replace(/[，、；。！？\s]/g, '');
+                const cleanCorrect = correctAns.replace(/[，、；。！？\s]/g, '');
+                const cleanTranslated = translatedText ? translatedText.replace(/[，、；。！？\s]/g, '') : '';
+
+                const normalizeNumbers = (text) => {
+                    const map = {'0':'零','1':'一','2':'二','3':'三','4':'四','5':'五','6':'六','7':'七','8':'八','9':'九','10':'十','11':'十一','12':'十二','13':'十三','14':'十四','15':'十五','16':'十六','17':'十七','18':'十八','19':'十九','20':'二十','30':'三十','40':'四十','50':'五十','60':'六十','70':'七十','80':'八十','90':'九十','100':'一百','1000':'一千'};
+                    let result = text;
+                    Object.keys(map).sort((a,b) => b.length - a.length).forEach(num => {
+                        result = result.replace(new RegExp(num, 'g'), map[num]);
+                    });
+                    return result;
+                };
+
+                const synonymMap = {
+                    '媽媽':'母親','爸爸':'父親','母親':'媽媽','父親':'爸爸',
+                    '小孩':'孩子','孩童':'兒童','困難':'艱難','艱難':'困難',
+                    '不正常':'異常','異常':'不正常','快樂':'開心','開心':'快樂',
+                    '漂亮':'美麗','美麗':'漂亮','聰明':'智慧','智慧':'聰明',
+                    '典禮':'儀式','儀式':'典禮','工作':'職業','職業':'工作',
+                    '圖片':'圖像','圖像':'圖片','照片':'圖片','聲音':'音效'
+                };
+
+                const normalizedUser = normalizeNumbers(cleanUser);
+                const normalizedCorrect = normalizeNumbers(cleanCorrect);
+                const normalizedTranslated = normalizeNumbers(cleanTranslated);
+
+                const synonymUser = synonymMap[normalizedUser] || normalizedUser;
+                const synonymCorrect = synonymMap[normalizedCorrect] || normalizedCorrect;
+
+                const removeCommonSuffixes = (text) => text.replace(/[的地得了著過]\s*$/g, '');
+                const coreUser = removeCommonSuffixes(synonymUser);
+                const coreCorrect = removeCommonSuffixes(synonymCorrect);
+                const coreTranslated = removeCommonSuffixes(normalizedTranslated);
+
+                const isSynonymMatch = synonymUser === normalizedCorrect || normalizedUser === synonymCorrect || coreUser === coreCorrect;
+
+                const editDistance = (s1, s2) => {
+                    const len1 = s1.length, len2 = s2.length;
+                    const dp = Array(len1 + 1).fill(null).map(() => Array(len2 + 1).fill(0));
+                    for (let i = 0; i <= len1; i++) dp[i][0] = i;
+                    for (let j = 0; j <= len2; j++) dp[0][j] = j;
+                    for (let i = 1; i <= len1; i++) {
+                        for (let j = 1; j <= len2; j++) {
+                            if (s1[i-1] === s2[j-1]) {
+                                dp[i][j] = dp[i-1][j-1];
+                            } else {
+                                dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + 1);
+                            }
+                        }
+                    }
+                    return dp[len1][len2];
+                };
+
+                const maxLen1 = Math.max(coreUser.length, coreCorrect.length);
+                const distance1 = editDistance(coreUser, coreCorrect);
+                const similarity1 = maxLen1 > 0 ? ((maxLen1 - distance1) / maxLen1) * 100 : 0;
+
+                let similarity2 = 0;
+                if (translatedText && coreTranslated) {
+                    const maxLen2 = Math.max(coreUser.length, coreTranslated.length);
+                    const distance2 = editDistance(coreUser, coreTranslated);
+                    similarity2 = maxLen2 > 0 ? ((maxLen2 - distance2) / maxLen2) * 100 : 0;
+                }
+
+                const containsKeyword = coreCorrect.length >= 2 && coreUser.includes(coreCorrect);
+                const reverseContains = coreUser.length >= 2 && coreCorrect.includes(coreUser);
+                const translatedContains = translatedText && coreTranslated.length >= 2 && 
+                                           (coreUser.includes(coreTranslated) || coreTranslated.includes(coreUser));
+                const translationMatch = translatedText && (similarity2 >= 40 || 
+                    (cleanTranslated.length >= 3 && (cleanUser.includes(cleanTranslated.slice(0, -1)) || 
+                    cleanTranslated.includes(cleanUser.slice(0, -1)))));
+
+                const isSimilar = isSynonymMatch || containsKeyword || reverseContains || 
+                                  translatedContains || translationMatch || similarity1 >= 40 || similarity2 >= 40;
+                const isCorrect = isExactMatch || isSimilar;
+
+                setResult({ 
+                    isCorrect, isExactMatch, correctAnswer: correctAns, translatedText,
+                    method: translatedText && similarity2 >= 40 ? 'translation' : 'similarity'
+                });
+                setScore(prev => ({ correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 }));
+                
+                if (!isCorrect) {
+                    addWordToWrongList(currentWord);
+                }
+                
+                setIsTranslating(false);
+            };
+
+            const nextWord = () => {
+                setUserAnswer('');
+                setResult(null);
+                if (unusedIndices.length === 0) {
+                    setCurrentWord(null);
+                } else {
+                    pickRandomWord();
+                }
+            };
+
+            const restart = () => {
+                setShowQuizSizeSelect(true);
+                setScore({ correct: 0, total: 0 });
+                setResult(null);
+                setUserAnswer('');
+                setCurrentWord(null);
+            };
+
+            const removeFromWrongList = (word) => {
+                setWrongWords(prev => prev.filter(w => 
+                    !(w.english === word.english && w.chinese === word.chinese)
+                ));
+                const wordIndex = allWords.findIndex(w => 
+                    w.english === word.english && w.chinese === word.chinese
+                );
+                if (wordIndex !== -1) {
+                    setUnusedIndices(prev => prev.filter(idx => idx !== wordIndex));
+                    setSessionStats(prev => ({ 
+                        tested: prev.tested, 
+                        remaining: Math.max(0, prev.remaining - 1)
+                    }));
+                }
+            };
+
+            const addToWrongList = () => {
+                if (!newWrongWord.english.trim()) {
+                    alert('請輸入英文單字');
+                    return;
+                }
+
+                const wordIndex = allWords.findIndex(w => 
+                    w.english.toLowerCase() === newWrongWord.english.trim().toLowerCase()
+                );
+
+                if (wordIndex === -1) {
+                    alert('這個單字不在題庫中');
+                    return;
+                }
+
+                const word = allWords[wordIndex];
+                const alreadyExists = wrongWords.some(w => 
+                    w.english === word.english && w.chinese === word.chinese
+                );
+
+                if (alreadyExists) {
+                    alert('這個單字已在錯題清單中');
+                    return;
+                }
+
+                setWrongWords(prev => [...prev, word]);
+                if (!unusedIndices.includes(wordIndex)) {
+                    setUnusedIndices(prev => [...prev, wordIndex]);
+                    setSessionStats(prev => ({ 
+                        tested: prev.tested, 
+                        remaining: prev.remaining + 1 
+                    }));
+                }
+
+                setNewWrongWord({ english: '', chinese: '' });
+                setShowAddWrong(false);
+            };
+
+            const accuracy = score.total > 0 ? ((score.correct / score.total) * 100).toFixed(1) : 0;
+            const allTested = currentWord === null && allWords.length > 0;
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+                    <div className="max-w-2xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-8">
+                            <h1 className="text-3xl font-bold text-center text-indigo-600 mb-2">單字翻譯測驗</h1>
+                            <p className="text-center text-gray-600 mb-6">上傳你的 Excel 檔案開始測驗</p>
+
+                            {allWords.length === 0 ? (
+                                <div className="text-center py-12">
+                                    <div className="flex justify-center mb-4"><FileSpreadsheet /></div>
+                                    <label className="cursor-pointer inline-block">
+                                        <input type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
+                                        <div className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors inline-flex items-center gap-2">
+                                            <Upload /> 上傳 Excel 檔案
+                                        </div>
+                                    </label>
+                                    <p className="text-sm text-gray-500 mt-4">檔案格式：第一欄為英文單字，第二欄為中文翻譯</p>
+                                </div>
+                            ) : showQuizSizeSelect ? (
+                                <div className="py-8">
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-2 text-center">選擇測驗數量</h2>
+                                    <p className="text-center text-gray-600 mb-6">
+                                        題庫共 <span className="font-bold text-indigo-600">{allWords.length}</span> 個單字
+                                        {wrongWords.length > 0 && (
+                                            <span className="text-red-600 ml-2">（已載入 {wrongWords.length} 個錯題）</span>
+                                        )}
+                                    </p>
+                                    
+                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                        <button onClick={() => startQuiz(10)} className="bg-blue-500 text-white py-4 px-6 rounded-lg hover:bg-blue-600 transition-colors text-lg font-medium">10 題</button>
+                                        <button onClick={() => startQuiz(20)} className="bg-blue-500 text-white py-4 px-6 rounded-lg hover:bg-blue-600 transition-colors text-lg font-medium">20 題</button>
+                                        <button onClick={() => startQuiz(50)} className="bg-blue-500 text-white py-4 px-6 rounded-lg hover:bg-blue-600 transition-colors text-lg font-medium">50 題</button>
+                                        <button onClick={() => startQuiz(100)} className="bg-blue-500 text-white py-4 px-6 rounded-lg hover:bg-blue-600 transition-colors text-lg font-medium">100 題</button>
+                                    </div>
+                                    
+                                    <div className="flex gap-2 mb-4">
+                                        <input
+                                            type="number"
+                                            placeholder="自訂題數"
+                                            value={customQuizSize}
+                                            onChange={(e) => setCustomQuizSize(e.target.value)}
+                                            className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-lg"
+                                            min="1"
+                                            max={allWords.length}
+                                        />
+                                        <button
+                                            onClick={() => {
+                                                const size = parseInt(customQuizSize);
+                                                if (size > 0 && size <= allWords.length) {
+                                                    startQuiz(size);
+                                                } else {
+                                                    alert(`請輸入 1 到 ${allWords.length} 之間的數字`);
+                                                }
+                                            }}
+                                            className="bg-green-500 text-white px-6 py-3 rounded-lg hover:bg-green-600 transition-colors font-medium"
+                                        >
+                                            開始
+                                        </button>
+                                    </div>
+                                    
+                                    <button onClick={() => startQuiz('all')} className="w-full bg-indigo-600 text-white py-4 rounded-lg hover:bg-indigo-700 transition-colors text-lg font-medium">
+                                        測驗全部 {allWords.length} 題
+                                    </button>
+                                    
+                                    {wrongWords.length > 0 && (
+                                        <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                            <p className="text-sm text-yellow-800 text-center">
+                                                💡 系統已載入上次的錯題，這些單字會包含在測驗中
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : allTested ? (
+                                <div className="text-center py-12">
+                                    <div className="text-6xl mb-4">🎉</div>
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-2">所有單字都測驗完了！</h2>
+                                    <div className="bg-indigo-50 rounded-lg p-6 my-6">
+                                        <p className="text-lg mb-2">本次測驗成績</p>
+                                        <p className="text-4xl font-bold text-indigo-600">{score.correct} / {score.total}</p>
+                                        <p className="text-2xl text-gray-600 mt-2">正確率：{accuracy}%</p>
+                                        <p className="text-sm text-gray-500 mt-4">已測驗：{sessionStats.tested} 個單字</p>
+                                    </div>
+                                    <button onClick={restart} className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors inline-flex items-center gap-2">
+                                        <RefreshCw /> 重新選擇題數
+                                    </button>
+                                </div>
+                            ) : (
+                                <div>
+                                    <div className="mb-6">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <div className="text-sm">
+                                                <span className="text-gray-600">已測驗：</span>
+                                                <span className="font-medium text-indigo-600">{sessionStats.tested}</span>
+                                                <span className="text-gray-600 mx-2">|</span>
+                                                <span className="text-gray-600">剩餘：</span>
+                                                <span className="font-medium text-gray-700">{sessionStats.remaining}</span>
+                                            </div>
+                                            <span className="text-sm font-medium text-indigo-600">答對：{score.correct} / {score.total}</span>
+                                        </div>
+                                        {wrongWords.length > 0 && (
+                                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3">
+                                                <p className="text-sm text-yellow-800">
+                                                    ⚠️ 錯題累積中：<span className="font-bold">{wrongWords.length}</span> 個（已立即加入測驗）
+                                                </p>
+                                            </div>
+                                        )}
+                                        <div className="w-full bg-gray-200 rounded-full h-2">
+                                            <div className="bg-indigo-600 h-2 rounded-full transition-all" 
+                                                 style={{width: `${quizSize === 'all' ? ((sessionStats.tested) / allWords.length) * 100 : ((sessionStats.tested) / (quizSize + wrongWords.length)) * 100}%`}} />
+                                        </div>
+                                        {score.total > 0 && (
+                                            <p className="text-center text-sm text-gray-600 mt-2">目前正確率：{accuracy}%</p>
+                                        )}
+                                    </div>
+
+                                    <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl p-8 mb-6 text-center">
+                                        <p className="text-white text-sm mb-2">請翻譯這個單字</p>
+                                        <p className="text-white text-4xl font-bold">{currentWord.english}</p>
+                                    </div>
+
+                                    {result === null ? (
+                                        <div>
+                                            <input
+                                                type="text"
+                                                value={userAnswer}
+                                                onChange={(e) => setUserAnswer(e.target.value)}
+                                                onKeyPress={(e) => e.key === 'Enter' && checkAnswer()}
+                                                placeholder="輸入中文翻譯（接受相似答案）"
+                                                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-lg mb-4"
+                                                autoFocus
+                                            />
+                                            <button
+                                                onClick={checkAnswer}
+                                                disabled={isTranslating}
+                                                className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                            >
+                                                {isTranslating ? '正在檢查答案（使用 AI 翻譯）...' : '確認答案'}
+                                            </button>
+                                            <p className="text-xs text-gray-500 text-center mt-2">
+                                                💡 提示：使用 AI 翻譯判斷，同義詞也接受（相似度 ≥ 40%）
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <div className={`rounded-lg p-6 mb-4 ${result.isCorrect ? 'bg-green-50 border-2 border-green-500' : 'bg-red-50 border-2 border-red-500'}`}>
+                                                <div className="flex items-center gap-3 mb-3">
+                                                    {result.isCorrect ? (
+                                                        <>
+                                                            <Check />
+                                                            <span className="text-2xl font-bold text-green-600">
+                                                                {result.isExactMatch ? '完全正確！' : '答案正確！'}
+                                                            </span>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <X className="w-8 h-8" />
+                                                            <span className="text-2xl font-bold text-red-600">答錯了（已立即加入測驗）</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <div className="space-y-2 text-lg">
+                                                    <p>
+                                                        <span className="text-gray-600">你的答案：</span>
+                                                        <span className={result.isCorrect ? 'text-green-700 font-medium' : 'text-red-700 font-medium'}>
+                                                            {userAnswer}
+                                                        </span>
+                                                    </p>
+                                                    {(!result.isExactMatch) && (
+                                                        <p>
+                                                            <span className="text-gray-600">標準答案：</span>
+                                                            <span className="text-green-700 font-medium">{result.correctAnswer}</span>
+                                                        </p>
+                                                    )}
+                                                    {result.translatedText && result.method === 'translation' && (
+                                                        <p className="text-sm text-blue-600 bg-blue-50 p-2 rounded">
+                                                            🤖 AI 翻譯：{result.translatedText}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={nextWord}
+                                                className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-lg"
+                                            >
+                                                {unusedIndices.length > 0 ? '下一題（隨機抽取）' : '查看成績'}
+                                            </button>
+                                            <p className="text-xs text-gray-500 text-center mt-2">⌨️ 按 Enter 鍵繼續</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {allWords.length > 0 && wrongWords.length > 0 && (
+                            <div className="bg-white rounded-2xl shadow-xl p-6 mt-6">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold text-red-600 flex items-center gap-2">
+                                        <X className="w-6 h-6" />
+                                        錯題清單（共 {wrongWords.length} 題）
+                                    </h2>
+                                    <button
+                                        onClick={() => setShowAddWrong(!showAddWrong)}
+                                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm"
+                                    >
+                                        {showAddWrong ? '取消' : '+ 手動新增錯題'}
+                                    </button>
+                                </div>
+
+                                {showAddWrong && (
+                                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                        <p className="text-sm text-gray-700 mb-3">輸入英文單字（必須在題庫中）</p>
+                                        <div className="flex gap-2 mb-2">
+                                            <input
+                                                type="text"
+                                                placeholder="英文單字"
+                                                value={newWrongWord.english}
+                                                onChange={(e) => setNewWrongWord(prev => ({ ...prev, english: e.target.value }))}
+                                                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                                            />
+                                            <button
+                                                onClick={addToWrongList}
+                                                className="bg-green-500 text-white px-6 py-2 rounded-lg hover:bg-green-600 transition-colors"
+                                            >
+                                                加入
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-500">提示：只需輸入英文，系統會自動找到對應的中文答案</p>
+                                    </div>
+                                )}
+
+                                <div className="space-y-2 max-h-96 overflow-y-auto">
+                                    {wrongWords.map((word, index) => (
+                                        <div 
+                                            key={`${word.english}-${word.chinese}-${index}`}
+                                            className="bg-red-50 border border-red-200 rounded-lg p-3 flex justify-between items-center hover:bg-red-100 transition-colors group"
+                                        >
+                                            <div>
+                                                <span className="font-bold text-gray-800">{word.english}</span>
+                                                <span className="text-gray-400 mx-2">→</span>
+                                                <span className="text-red-600">{word.chinese}</span>
+                                            </div>
+                                            <button
+                                                onClick={() => removeFromWrongList(word)}
+                                                className="text-gray-400 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100"
+                                                title="從錯題清單移除"
+                                            >
+                                                <X className="w-5 h-5" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="text-sm text-gray-500 mt-4 text-center">
+                                    這些單字已立即加入測驗中 | 懸停在單字上可刪除 | 自動儲存到瀏覽器
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<WordQuizChecker />, document.getElementById('root'));
+    </script>
+</body>
+</html>
